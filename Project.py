@@ -1,6 +1,5 @@
 import glfw
 from OpenGL.GL import *
-import OpenGL.GL.shaders as shaders
 import numpy as np
 
 class PixelArtEditor:
@@ -33,6 +32,9 @@ class PixelArtEditor:
         # Initialize drawing parameters
         self.current_color = (0, 0, 0, 1)  # Black
         self.drawing = False
+        self.last_grid_x = None
+        self.last_grid_y = None
+        self.eraser_mode = False
 
         # Canvas initialization
         self.canvas = np.full((self.rows, self.cols, 4), 
@@ -52,43 +54,85 @@ class PixelArtEditor:
 
     def get_grid_position(self, x, y):
         """Convert screen coordinates to grid coordinates"""
-        # Convert screen coordinates to normalized device coordinates
-        norm_x = (x / self.width) * 2 - 1
-        norm_y = -((y / self.height) * 2 - 1)
-        
-        # Calculate grid position
-        grid_x = int((norm_x + 1) / 2 * self.cols)
-        grid_y = int((norm_y + 1) / 2 * self.rows)
-        
+        # Flip the y-coordinate
+        flipped_y = self.height - y
+        grid_x = int(x // self.grid_size)
+        grid_y = int(flipped_y // self.grid_size)
         return grid_x, grid_y
+
+
+    def draw_line(self, x1, y1, x2, y2, color):
+        """Bresenham's line algorithm for pixel drawing"""
+        # Swap coordinates if drawing from bottom to top
+        if y1 > y2:
+            x1, x2 = x2, x1
+            y1, y2 = y2, y1
+        
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        x, y = x1, y1
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        
+        if dx > dy:
+            err = dx / 2.0
+            while x != x2:
+                self.canvas[y, x] = color
+                err -= dy
+                if err < 0:
+                    y += sy
+                    err += dx
+                x += sx
+        else:
+            err = dy / 2.0
+            while y != y2:
+                self.canvas[y, x] = color
+                err -= dx
+                if err < 0:
+                    x += sx
+                    err += dy
+                y += sy
+        
+        # Draw the final pixel
+        self.canvas[y, x] = color
 
     def mouse_button_callback(self, window, button, action, mods):
         """Handle mouse button events"""
         if button == glfw.MOUSE_BUTTON_LEFT:
+            x, y = glfw.get_cursor_pos(window)
+            
             if action == glfw.PRESS:
-                x, y = glfw.get_cursor_pos(window)
-                
                 # Check if clicked in palette area
                 if y > self.height - 50:
                     color_index = int(x // 50)
                     if color_index < len(self.palette):
                         self.current_color = self.palette[color_index]
                 else:
-                    # Start drawing
+                    # Start drawing or erasing
                     self.drawing = True
                     grid_x, grid_y = self.get_grid_position(x, y)
                     if 0 <= grid_x < self.cols and 0 <= grid_y < self.rows:
-                        self.canvas[grid_y, grid_x] = self.current_color
+                        self.canvas[grid_y, grid_x] = (1, 1, 1, 1) if self.eraser_mode else self.current_color
+                        self.last_grid_x = grid_x
+                        self.last_grid_y = grid_y
             
             elif action == glfw.RELEASE:
                 self.drawing = False
+                self.last_grid_x = None
+                self.last_grid_y = None
+
 
     def cursor_pos_callback(self, window, x, y):
-        """Handle mouse movement while drawing"""
         if self.drawing and y < self.height - 50:
             grid_x, grid_y = self.get_grid_position(x, y)
-            if 0 <= grid_x < self.cols and 0 <= grid_y < self.rows:
-                self.canvas[grid_y, grid_x] = self.current_color
+            if (0 <= grid_x < self.cols and 0 <= grid_y < self.rows and 
+                self.last_grid_x is not None and self.last_grid_y is not None):
+                # Draw a line between the last point and current point
+                color = (1, 1, 1, 1) if self.eraser_mode else self.current_color
+                self.draw_line(self.last_grid_x, self.last_grid_y, grid_x, grid_y, color)
+                # Update last position
+                self.last_grid_x = grid_x
+                self.last_grid_y = grid_y
 
     def key_callback(self, window, key, scancode, action, mods):
         """Handle keyboard events"""
@@ -99,6 +143,11 @@ class PixelArtEditor:
             elif key == glfw.KEY_S:
                 # Save functionality (placeholder)
                 print("Save functionality not implemented in this version")
+            elif key == glfw.KEY_E:
+                # Toggle eraser mode
+                self.eraser_mode = not self.eraser_mode
+                print("Eraser mode:", "On" if self.eraser_mode else "Off")
+
 
     def draw_grid(self):
         """Draw grid lines"""
@@ -120,7 +169,6 @@ class PixelArtEditor:
         glEnd()
 
     def draw_canvas(self):
-        """Draw pixels on canvas"""
         glBegin(GL_QUADS)
         for y in range(self.rows):
             for x in range(self.cols):
@@ -130,9 +178,9 @@ class PixelArtEditor:
                 
                 # Calculate normalized coordinates
                 x1 = x / self.cols * 2 - 1
-                y1 = 1 - (y / self.rows * 2)
+                y1 = y / self.rows * 2 - 1
                 x2 = (x + 1) / self.cols * 2 - 1
-                y2 = 1 - ((y + 1) / self.rows * 2)
+                y2 = (y + 1) / self.rows * 2 - 1
                 
                 # Draw pixel as a quad
                 glVertex2f(x1, y1)
